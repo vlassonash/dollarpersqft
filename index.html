@@ -108,6 +108,8 @@ td.headline{font-weight:600;font-size:15px}
 /* ---------- detail modal ---------- */
 .row{cursor:pointer}
 .row:hover{border-color:var(--ink-60)}
+.rowlink{display:inline-block;margin-top:9px;font-family:var(--f-data);font-size:11px;letter-spacing:.03em;text-decoration:none;color:var(--ink-60);border:1px solid var(--rule);border-radius:3px;padding:3px 9px;white-space:nowrap}
+.rowlink:hover{color:var(--ink);border-color:var(--ink-60);background:#fff}
 .modal{position:fixed;inset:0;background:rgba(20,22,25,.55);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;z-index:50}
 .modal[hidden]{display:none}
 .modal-card{background:var(--panel);border:1px solid var(--rule);border-radius:4px;max-width:640px;width:100%;padding:26px 28px;position:relative;box-shadow:0 12px 40px rgba(0,0,0,.25)}
@@ -518,6 +520,7 @@ function renderRows(rows){
         <div class="price">${money(l.price)}</div>
         <div class="gap">at ${money(l.baseline)}/sq ft:<br>${money(l.fairPrice)}</div>
         <div class="gap" style="color:${c}">${gapDollars>=0?"−":"+"}${money(Math.abs(gapDollars))}</div>
+        <a class="rowlink" href="${outLinks(l).zillow}" target="_blank" rel="noopener noreferrer" title="Open this address on Zillow">Zillow ↗</a>
       </div>
     </article>`;
   }).join("");
@@ -640,6 +643,7 @@ function bindSel(id,key,num){ document.getElementById(id).addEventListener("chan
 
   const detail = document.getElementById("detail");
   document.getElementById("rows").addEventListener("click", e => {
+    if (e.target.closest("a")) return;   // let outbound links work without opening the detail
     const art = e.target.closest("article.row"); if (!art) return;
     const l = byId[art.dataset.id]; if (l) openDetail(l);
   });
