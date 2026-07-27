@@ -140,6 +140,13 @@ td.headline{font-weight:600;font-size:15px}
     <label for="fType">Type</label>
     <select id="fType"><option value="">Any</option></select>
   </div>
+  <div class="field">
+    <label for="fNew">New build</label>
+    <select id="fNew" style="min-width:100px">
+      <option value="0">Excluded</option>
+      <option value="1">Included</option>
+    </select>
+  </div>
   <button class="clear" id="btnClear">Clear</button>
 </div>
 
@@ -300,34 +307,54 @@ function milesBetween(a, b){
   return 2*R*Math.asin(Math.sqrt(h));
 }
 
+/* One physical building can be listed as many separate units (e.g. a condo
+   block). Collapse them to a single comp — one median $/sq ft and price per
+   street address — so no single building can dominate a size band. */
+function perAddress(rows){
+  const g = {};
+  rows.forEach(o => { const k = o.address || o.id; (g[k] = g[k] || []).push(o); });
+  return Object.values(g).map(units => ({
+    ppsf:  median(units.map(ppsf)),
+    price: median(units.map(o => o.price))
+  }));
+}
+
 /* For each home: find nearby homes in the same size band, expanding the
    radius until there are enough for a stable median. Falls back to the
-   whole band if the area is too sparse. */
+   whole band if the area is too sparse.
+
+   Comps are drawn only from resale listings. New construction is priced off
+   a builder base that excludes lot premium and options, so it fakes its way
+   to the top of any $/sq ft rank; it never sets a benchmark, though it is
+   still scored and displayed against the resale market. */
 function scoreAll(listings){
+  const compPool = listings.filter(l => !l.isNewConstruction);
   const byBand = {};
-  BANDS.forEach(b => byBand[b.key] = listings.filter(l => bandOf(l.sqft).key === b.key));
+  BANDS.forEach(b => byBand[b.key] = compPool.filter(l => bandOf(l.sqft).key === b.key));
 
   return listings.map(l => {
     const band = bandOf(l.sqft);
     const pool = byBand[band.key];
-    let comps = [], radius = null;
+    let vals = [], radius = null, compCount = 0;
 
     if (l.lat != null && l.lng != null){
       for (const r of CONFIG.radiiMiles){
-        comps = pool.filter(o => o.lat != null && milesBetween(l, o) <= r);
-        if (comps.length >= CONFIG.minComps){ radius = r; break; }
+        const agg = perAddress(pool.filter(o => o.lat != null && milesBetween(l, o) <= r));
+        if (agg.length >= CONFIG.minComps){ vals = agg.map(x => x.ppsf); radius = r; compCount = agg.length; break; }
       }
     }
-    if (comps.length < CONFIG.minComps){ comps = pool; radius = null; }
+    if (vals.length < CONFIG.minComps){
+      const agg = perAddress(pool);
+      vals = agg.map(x => x.ppsf); radius = null; compCount = agg.length;
+    }
 
-    const vals     = comps.map(ppsf);
     const baseline = median(vals);
     const own      = ppsf(l);
 
     return {
       ...l, band, ppsf: own, baseline,
       residual: baseline ? (baseline - own)/baseline : 0,
-      compCount: comps.length,
+      compCount,
       radius,
       fairPrice: baseline ? baseline * l.sqft : null
     };
@@ -341,10 +368,11 @@ const color = r => r >= .06 ? "var(--under)" : r > -.06 ? "var(--par)" : "var(--
    STATE
    ============================================================ */
 let ALL = [], shown = CONFIG.pageSize;
-const S = { area:"", type:"", beds:0, priceMin:null, priceMax:null, sqftMin:null, sqftMax:null, sort:"value" };
+const S = { area:"", type:"", beds:0, priceMin:null, priceMax:null, sqftMin:null, sqftMax:null, includeNew:0, sort:"value" };
 
 function filtered(scored){
   return scored.filter(l =>
+    (S.includeNew || !l.isNewConstruction) &&
     (!S.area || l.city === S.area) &&
     (!S.type || l.propertyType === S.type) &&
     (!S.beds || l.beds >= S.beds) &&
@@ -393,18 +421,20 @@ function renderBench(scored, rows){
   const activeBands = new Set(rows.map(r => r.band.key));
 
   document.getElementById("benchBody").innerHTML = BANDS.map(b => {
-    const inBand = scope.filter(l => bandOf(l.sqft).key === b.key);
-    if (!inBand.length) return `<tr><td>${b.label}</td><td colspan="4" class="thin">no listings</td></tr>`;
-    const vals = inBand.map(ppsf);
+    // Benchmarks are set by resale listings only, counting each building once.
+    const inBand = scope.filter(l => bandOf(l.sqft).key === b.key && !l.isNewConstruction);
+    const agg = perAddress(inBand);
+    if (!agg.length) return `<tr><td>${b.label}</td><td colspan="4" class="thin">no listings</td></tr>`;
+    const vals = agg.map(x => x.ppsf);
     const med  = median(vals);
     const lo   = quantile(vals,.25), hi = quantile(vals,.75);
-    const thin = inBand.length < CONFIG.minComps;
+    const thin = agg.length < CONFIG.minComps;
     return `<tr class="${activeBands.has(b.key)?"active":""}">
       <td>${b.label}</td>
       <td class="headline">${money(med)}</td>
       <td>${money(lo)} – ${money(hi)}</td>
-      <td>${money(median(inBand.map(l=>l.price)))}</td>
-      <td>${inBand.length}${thin?' <span class="thin">thin</span>':''}</td>
+      <td>${money(median(agg.map(x=>x.price)))}</td>
+      <td>${agg.length}${thin?' <span class="thin">thin</span>':''}</td>
     </tr>`;
   }).join("");
 }
@@ -489,16 +519,17 @@ function bindSel(id,key,num){ document.getElementById(id).addEventListener("chan
   [...new Set(ALL.map(l=>l.city))].sort().forEach(c => aSel.add(new Option(c,c)));
   [...new Set(ALL.map(l=>l.propertyType))].sort().forEach(t => tSel.add(new Option(t,t)));
 
-  bindSel("fArea","area"); bindSel("fType","type"); bindSel("fBeds","beds",true); bindSel("fSort","sort");
+  bindSel("fArea","area"); bindSel("fType","type"); bindSel("fBeds","beds",true); bindSel("fNew","includeNew",true); bindSel("fSort","sort");
   bindNum("fPriceMin","priceMin"); bindNum("fPriceMax","priceMax");
   bindNum("fSqftMin","sqftMin");   bindNum("fSqftMax","sqftMax");
 
   document.getElementById("btnMore").addEventListener("click", ()=>{ shown += CONFIG.pageSize; render(); });
   document.getElementById("btnClear").addEventListener("click", ()=>{
-    Object.assign(S,{area:"",type:"",beds:0,priceMin:null,priceMax:null,sqftMin:null,sqftMax:null});
+    Object.assign(S,{area:"",type:"",beds:0,priceMin:null,priceMax:null,sqftMin:null,sqftMax:null,includeNew:0});
     document.querySelectorAll(".refine input").forEach(i=>i.value="");
     ["fArea","fType"].forEach(id=>document.getElementById(id).value="");
     document.getElementById("fBeds").value="0";
+    document.getElementById("fNew").value="0";
     shown=CONFIG.pageSize; render();
   });
 
