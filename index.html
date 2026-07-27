@@ -105,6 +105,28 @@ td.headline{font-weight:600;font-size:15px}
   .field select{min-width:130px}
   .wrap{padding:0 16px 60px}
 }
+/* ---------- detail modal ---------- */
+.row{cursor:pointer}
+.row:hover{border-color:var(--ink-60)}
+.modal{position:fixed;inset:0;background:rgba(20,22,25,.55);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;z-index:50}
+.modal[hidden]{display:none}
+.modal-card{background:var(--panel);border:1px solid var(--rule);border-radius:4px;max-width:640px;width:100%;padding:26px 28px;position:relative;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.modal-x{position:absolute;top:10px;right:14px;background:none;border:none;font-size:24px;line-height:1;color:var(--ink-60);cursor:pointer}
+.d-addr{font-size:19px;font-weight:600;color:var(--ink);margin:0 40px 3px 0}
+.d-sub{font-family:var(--f-data);font-size:12px;color:var(--ink-60);margin-bottom:16px}
+.d-verdict{font-family:var(--f-data);font-size:14px;font-weight:600;margin-bottom:8px}
+.d-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px 18px;margin:14px 0 18px;padding:16px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.d-grid .k{display:block;font-family:var(--f-data);font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-60);margin-bottom:2px}
+.d-grid .v{font-family:var(--f-data);font-size:13px;color:var(--ink)}
+.d-comps{margin:4px 0 20px}
+.d-comps h4{font-family:var(--f-data);font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-60);margin:0 0 8px;font-weight:600}
+.d-comps table{width:100%;border-collapse:collapse;font-family:var(--f-data);font-size:12px}
+.d-comps td{padding:5px 0;border-bottom:1px solid var(--rule);color:var(--ink)}
+.d-comps td.r{text-align:right;white-space:nowrap;padding-left:10px}
+.d-out{display:flex;gap:10px;flex-wrap:wrap}
+.d-out a{font-family:var(--f-data);font-size:12px;letter-spacing:.03em;text-decoration:none;border:1px solid var(--rule);border-radius:3px;padding:10px 14px;color:var(--ink);background:#fff}
+.d-out a.primary{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.d-note{font-family:var(--f-data);font-size:11px;color:var(--ink-60);margin-top:12px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -198,6 +220,13 @@ td.headline{font-weight:600;font-size:15px}
   <p style="font-size:12px">Reports are provided solely for general business information purposes. No advisory, fiduciary or other relationship is created by any acceptance or use of Reports. The information and conclusions contained in Reports are not definitive forecasts, appraisals or opinions of valuations, are not guaranteed, and should not be construed as a certified appraisal or valuation, or investment advice. Attributes for properties may be inaccurate because county assessor and property data records do not always include recent additions and/or modifications to property structures.</p>
 </section>
 
+</div>
+
+<div class="modal" id="detail" hidden>
+  <div class="modal-card">
+    <button class="modal-x" id="detailClose" aria-label="Close">&times;</button>
+    <div id="detailBody"></div>
+  </div>
 </div>
 
 <script>
@@ -319,6 +348,25 @@ function perAddress(rows){
   }));
 }
 
+/* A short, distance-sorted sample of the actual comps behind a home's
+   benchmark — one representative (nearest) unit per building — for the
+   detail view. Display only; the benchmark maths above is unchanged. */
+function compSample(subject, pool){
+  const canDist = subject.lat != null && subject.lng != null;
+  const byAddr = {};
+  pool.forEach(o => {
+    if (o.id === subject.id) return;
+    const k = o.address || o.id;
+    const d = (canDist && o.lat != null) ? milesBetween(subject, o) : null;
+    const cur = byAddr[k];
+    if (!cur || (d != null && (cur._d == null || d < cur._d)))
+      byAddr[k] = { address:o.address, city:o.city, sqft:o.sqft, ppsf:ppsf(o), price:o.price, _d:d };
+  });
+  const arr = Object.values(byAddr);
+  if (canDist) arr.sort((a,b)=>(a._d==null?1e9:a._d)-(b._d==null?1e9:b._d));
+  return arr.slice(0,8).map(x => ({ address:x.address, city:x.city, sqft:x.sqft, ppsf:x.ppsf, price:x.price, dist:x._d }));
+}
+
 /* For each home: find nearby homes in the same size band, expanding the
    radius until there are enough for a stable median. Falls back to the
    whole band if the area is too sparse.
@@ -335,16 +383,18 @@ function scoreAll(listings){
   return listings.map(l => {
     const band = bandOf(l.sqft);
     const pool = byBand[band.key];
-    let vals = [], radius = null, compCount = 0;
+    let vals = [], radius = null, compCount = 0, near = [];
 
     if (l.lat != null && l.lng != null){
       for (const r of CONFIG.radiiMiles){
-        const agg = perAddress(pool.filter(o => o.lat != null && milesBetween(l, o) <= r));
+        near = pool.filter(o => o.lat != null && milesBetween(l, o) <= r);
+        const agg = perAddress(near);
         if (agg.length >= CONFIG.minComps){ vals = agg.map(x => x.ppsf); radius = r; compCount = agg.length; break; }
       }
     }
     if (vals.length < CONFIG.minComps){
-      const agg = perAddress(pool);
+      near = pool;
+      const agg = perAddress(near);
       vals = agg.map(x => x.ppsf); radius = null; compCount = agg.length;
     }
 
@@ -356,7 +406,8 @@ function scoreAll(listings){
       residual: baseline ? (baseline - own)/baseline : 0,
       compCount,
       radius,
-      fairPrice: baseline ? baseline * l.sqft : null
+      fairPrice: baseline ? baseline * l.sqft : null,
+      comps: compSample(l, near)
     };
   });
 }
@@ -367,7 +418,7 @@ const color = r => r >= .06 ? "var(--under)" : r > -.06 ? "var(--par)" : "var(--
 /* ============================================================
    STATE
    ============================================================ */
-let ALL = [], shown = CONFIG.pageSize;
+let ALL = [], shown = CONFIG.pageSize, byId = {};
 const S = { area:"", type:"", beds:0, priceMin:null, priceMax:null, sqftMin:null, sqftMax:null, includeNew:0, sort:"value" };
 
 function filtered(scored){
@@ -399,6 +450,7 @@ const pctv  = n => (n>=0?"−":"+") + Math.abs(Math.round(n*100)) + "%";
 
 function render(){
   const scored = scoreAll(ALL);
+  byId = {}; scored.forEach(x => byId[x.id] = x);
   const rows   = filtered(scored).sort(SORTS[S.sort]);
   renderBench(scored, rows);
   renderRows(rows);
@@ -453,7 +505,7 @@ function renderRows(rows){
     const c = color(l.residual);
     const near = l.radius ? `${l.compCount} homes its size within ${l.radius} mi` : `${l.compCount} homes its size`;
     const gapDollars = l.fairPrice ? l.fairPrice - l.price : 0;
-    return `<article class="row" style="border-left-color:${c}">
+    return `<article class="row" data-id="${l.id}" style="border-left-color:${c}">
       <div>
         <div class="psf" style="color:${c}">${money(l.ppsf)}<small>per sq ft</small></div>
       </div>
@@ -473,6 +525,59 @@ function renderRows(rows){
   const more = document.getElementById("btnMore");
   more.hidden = rows.length <= shown;
   more.textContent = `Show more — ${rows.length - shown} remaining`;
+}
+
+/* ============================================================
+   DETAIL VIEW
+   ============================================================ */
+function outLinks(l){
+  const addr = `${l.address}, ${l.city}, TN ${l.zip||""}`.trim();
+  return {
+    zillow: `https://www.zillow.com/homes/${encodeURIComponent(addr)}_rb/`,
+    google: `https://www.google.com/search?q=${encodeURIComponent(l.address+" "+l.city+" TN "+(l.zip||"")+" for sale")}`
+  };
+}
+
+function openDetail(l){
+  const c   = color(l.residual);
+  const gap = l.fairPrice ? l.fairPrice - l.price : 0;
+  const lk  = outLinks(l);
+  const near = l.radius ? `${l.compCount} similar-size homes within ${l.radius} mi`
+                        : `${l.compCount} similar-size homes in the band`;
+  const comps = (l.comps||[]).map(x => `<tr>
+      <td>${x.address}${x.city && x.city!==l.city?`, ${x.city}`:""}</td>
+      <td class="r">${x.dist!=null?(x.dist<0.1?"<0.1 mi":x.dist.toFixed(1)+" mi"):"—"}</td>
+      <td class="r">${x.sqft?x.sqft.toLocaleString():"—"} sf</td>
+      <td class="r">${money(x.ppsf)}/sf</td>
+      <td class="r">${money(x.price)}</td>
+    </tr>`).join("");
+
+  document.getElementById("detailBody").innerHTML = `
+    <div class="d-addr">${l.address}${l.isNewConstruction?' <span class="tag">new build</span>':''}</div>
+    <div class="d-sub">${l.city} ${l.zip||""} · ${l.propertyType||""}${l.mlsNumber?` · MLS ${l.mlsNumber}`:""}</div>
+    <div class="d-verdict" style="color:${c}">${money(l.ppsf)}/sq ft — ${pctv(l.residual)} ${word(l.residual)} vs ${money(l.baseline)}/sq ft nearby</div>
+    <div class="d-grid">
+      <div><span class="k">Asking price</span><span class="v">${money(l.price)}</span></div>
+      <div><span class="k">Fair @ ${money(l.baseline)}/sf</span><span class="v">${l.fairPrice?money(l.fairPrice):"—"}</span></div>
+      <div><span class="k">Difference</span><span class="v" style="color:${c}">${gap>=0?"−":"+"}${money(Math.abs(gap))}</span></div>
+      <div><span class="k">Size</span><span class="v">${l.sqft.toLocaleString()} sq ft</span></div>
+      <div><span class="k">Beds / baths</span><span class="v">${l.beds} / ${l.baths}</span></div>
+      <div><span class="k">Lot</span><span class="v">${l.lotAcres?l.lotAcres+" ac":"—"}</span></div>
+      <div><span class="k">Year built</span><span class="v">${l.yearBuilt||"—"}</span></div>
+      <div><span class="k">Days listed</span><span class="v">${l.dom!=null?l.dom:"—"}</span></div>
+      <div><span class="k">HOA / mo</span><span class="v">${l.hoaMonthly?money(l.hoaMonthly):"—"}</span></div>
+    </div>
+    <div class="d-comps">
+      <h4>Comparable homes behind this benchmark <span style="text-transform:none;letter-spacing:0">· ${near}</span></h4>
+      <table>${comps || `<tr><td>Too few nearby same-size homes — the benchmark falls back to the wider size band.</td></tr>`}</table>
+    </div>
+    <div class="d-out">
+      <a class="primary" href="${lk.zillow}" target="_blank" rel="noopener noreferrer">See photos &amp; full listing on Zillow ↗</a>
+      <a href="${lk.google}" target="_blank" rel="noopener noreferrer">Photos &amp; other sites ↗</a>
+    </div>
+    <div class="d-note">PSF shows the value analysis. Photos and the full listing live on the source site — the buttons above open this address there.</div>
+  `;
+  document.getElementById("detail").hidden = false;
 }
 
 /* ============================================================
@@ -532,6 +637,15 @@ function bindSel(id,key,num){ document.getElementById(id).addEventListener("chan
     document.getElementById("fNew").value="0";
     shown=CONFIG.pageSize; render();
   });
+
+  const detail = document.getElementById("detail");
+  document.getElementById("rows").addEventListener("click", e => {
+    const art = e.target.closest("article.row"); if (!art) return;
+    const l = byId[art.dataset.id]; if (l) openDetail(l);
+  });
+  document.getElementById("detailClose").addEventListener("click", ()=> detail.hidden = true);
+  detail.addEventListener("click", e => { if (e.target === detail) detail.hidden = true; });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") detail.hidden = true; });
 
   render();
 })();
