@@ -110,6 +110,14 @@ td.headline{font-weight:600;font-size:15px}
 .row:hover{border-color:var(--ink-60)}
 .rowlink{display:inline-block;margin-top:9px;font-family:var(--f-data);font-size:11px;letter-spacing:.03em;text-decoration:none;color:var(--ink-60);border:1px solid var(--rule);border-radius:3px;padding:3px 9px;white-space:nowrap}
 .rowlink:hover{color:var(--ink);border-color:var(--ink-60);background:#fff}
+.deal{display:inline-block;font-family:var(--f-data);font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;padding:3px 9px;border-radius:3px;border:1px solid transparent;white-space:nowrap}
+.deal.great{background:var(--under);color:#fff}
+.deal.good{background:#e2efec;color:var(--under);border-color:#bfdcd6}
+.deal.fair{background:#eceeea;color:var(--ink-60);border-color:var(--rule)}
+.deal.high{background:#f6e6dc;color:var(--over);border-color:#e6cbb8}
+.deal.over{background:var(--over);color:#fff}
+.deal.nodata{background:#eceeea;color:var(--ink-40);border-color:var(--rule)}
+.d-deal{margin-bottom:10px}
 .modal{position:fixed;inset:0;background:rgba(20,22,25,.55);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;z-index:50}
 .modal[hidden]{display:none}
 .modal-card{background:var(--panel);border:1px solid var(--rule);border-radius:4px;max-width:640px;width:100%;padding:26px 28px;position:relative;box-shadow:0 12px 40px rgba(0,0,0,.25)}
@@ -210,6 +218,7 @@ td.headline{font-weight:600;font-size:15px}
 <section class="method">
   <h3>How "value" is worked out</h3>
   <p>Each home is compared to nearby homes <em>of a similar size</em> — the nearest comparable listings within its size band, found by expanding a radius around it until there are enough to form a stable median. Its value figure is how far its own $/sq ft sits below or above that median.</p>
+  <p>That gap is what the rating badge summarises. <strong>Great Deal</strong> and <strong>Good Deal</strong> mean a home is priced 15%+ or 6–15% below comparable homes its size; <strong>Fair Deal</strong> is within 6% either way; <strong>High Price</strong> and <strong>Overpriced</strong> are the same distances above. Where an area is too sparse for a reliable local comparison, a home is marked <strong>Limited data</strong> rather than rated. The badge is strictly a <em>price-versus-comparable-homes</em> read — it does not judge condition, finish, land or location quality, which the number cannot see.</p>
   <p>The size band matters more than people expect. Price per square foot falls as houses get bigger: land, kitchen, roof and mechanical systems are near-fixed costs spread across more area. A 6,000 sq ft house at $200/sq ft is ordinary. A 1,800 sq ft house at $200/sq ft in the same street is a genuine outlier. Comparing them directly would rank the large house as a bargain when it is merely large.</p>
 
   <h3>What the number can't see</h3>
@@ -417,6 +426,22 @@ function scoreAll(listings){
 const word  = r => r >= .15 ? "well under" : r >= .06 ? "under" : r > -.06 ? "about right" : r > -.15 ? "over" : "well over";
 const color = r => r >= .06 ? "var(--under)" : r > -.06 ? "var(--par)" : "var(--over)";
 
+/* Categorical deal rating (CarGurus-style): "Deal" for favourable, "Price"
+   for unfavourable. A home is only rated when it has a location-specific
+   benchmark from enough nearby same-size comps; otherwise it shows
+   "Limited data" rather than a confident-but-thin verdict. Thresholds match
+   word() above so badge and sentence never disagree. */
+function dealTier(l){
+  if (l.baseline == null || l.radius == null || l.compCount < CONFIG.minComps)
+    return { label:"Limited data", cls:"nodata" };
+  const r = l.residual;
+  if (r >= .15) return { label:"Great Deal", cls:"great" };
+  if (r >= .06) return { label:"Good Deal",  cls:"good"  };
+  if (r > -.06) return { label:"Fair Deal",  cls:"fair"  };
+  if (r > -.15) return { label:"High Price", cls:"high"  };
+  return { label:"Overpriced", cls:"over" };
+}
+
 /* ============================================================
    STATE
    ============================================================ */
@@ -505,6 +530,7 @@ function renderRows(rows){
 
   host.innerHTML = rows.slice(0, shown).map(l => {
     const c = color(l.residual);
+    const tier = dealTier(l);
     const near = l.radius ? `${l.compCount} homes its size within ${l.radius} mi` : `${l.compCount} homes its size`;
     const gapDollars = l.fairPrice ? l.fairPrice - l.price : 0;
     return `<article class="row" data-id="${l.id}" style="border-left-color:${c}">
@@ -512,6 +538,7 @@ function renderRows(rows){
         <div class="psf" style="color:${c}">${money(l.ppsf)}<small>per sq ft</small></div>
       </div>
       <div>
+        <div style="margin-bottom:6px"><span class="deal ${tier.cls}">${tier.label}</span></div>
         <div class="addr">${l.address}${l.isSample?'<span class="tag fake">not a real listing</span>':''}${l.isNewConstruction?'<span class="tag">new build</span>':''}</div>
         <div class="meta"><em>${l.city}</em> ${l.zip} · ${l.beds} bd / ${l.baths} ba · <em>${l.sqft.toLocaleString()}</em> sq ft · ${l.lotAcres?l.lotAcres+" ac · ":""}built ${l.yearBuilt} · ${l.dom} days listed${l.hoaMonthly?" · HOA "+money(l.hoaMonthly):""}</div>
         <div class="vs" style="color:${c}">${pctv(l.residual)} ${word(l.residual)} · nearby ${l.band.label.toLowerCase()} homes ask ${money(l.baseline)}/sq ft <span class="thin">(${near})</span></div>
@@ -545,6 +572,7 @@ function openDetail(l){
   const c   = color(l.residual);
   const gap = l.fairPrice ? l.fairPrice - l.price : 0;
   const lk  = outLinks(l);
+  const tier = dealTier(l);
   const near = l.radius ? `${l.compCount} similar-size homes within ${l.radius} mi`
                         : `${l.compCount} similar-size homes in the band`;
   const comps = (l.comps||[]).map(x => `<tr>
@@ -558,6 +586,7 @@ function openDetail(l){
   document.getElementById("detailBody").innerHTML = `
     <div class="d-addr">${l.address}${l.isNewConstruction?' <span class="tag">new build</span>':''}</div>
     <div class="d-sub">${l.city} ${l.zip||""} · ${l.propertyType||""}${l.mlsNumber?` · MLS ${l.mlsNumber}`:""}</div>
+    <div class="d-deal"><span class="deal ${tier.cls}">${tier.label}</span></div>
     <div class="d-verdict" style="color:${c}">${money(l.ppsf)}/sq ft — ${pctv(l.residual)} ${word(l.residual)} vs ${money(l.baseline)}/sq ft nearby</div>
     <div class="d-grid">
       <div><span class="k">Asking price</span><span class="v">${money(l.price)}</span></div>
